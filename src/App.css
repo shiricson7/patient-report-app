@@ -212,6 +212,11 @@
   color: var(--ink);
 }
 
+.upload-card__hint {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 .upload-card__error {
   display: flex;
   align-items: center;

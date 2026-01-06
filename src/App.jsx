@@ -51,6 +51,58 @@ const normalizeAge = (value) => {
   return null
 }
 
+const columnLabel = (index) => {
+  let label = ''
+  let current = index + 1
+  while (current > 0) {
+    const remainder = (current - 1) % 26
+    label = String.fromCharCode(65 + remainder) + label
+    current = Math.floor((current - 1) / 26)
+  }
+  return label
+}
+
+const findBestColumn = (rows) => {
+  const maxColumns = rows.reduce((max, row) => {
+    if (Array.isArray(row)) {
+      return Math.max(max, row.length)
+    }
+    return max
+  }, 0)
+
+  let best = { ages: [], columnIndex: null, count: 0 }
+  for (let col = 0; col < maxColumns; col += 1) {
+    const ages = []
+    rows.forEach((row) => {
+      const age = normalizeAge(row?.[col])
+      if (age !== null && age >= 0 && age <= 120) {
+        ages.push(age)
+      }
+    })
+    if (ages.length > best.count) {
+      best = { ages, columnIndex: col, count: ages.length }
+    }
+  }
+  return best
+}
+
+const findAgesInWorkbook = (workbook) => {
+  let best = { ages: [], sheetName: '', columnIndex: null, count: 0 }
+  workbook.SheetNames.forEach((sheetName) => {
+    const sheet = workbook.Sheets[sheetName]
+    const rows = XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      raw: true,
+      defval: null,
+    })
+    const result = findBestColumn(rows)
+    if (result.count > best.count) {
+      best = { ...result, sheetName }
+    }
+  })
+  return best
+}
+
 const buildCounts = (ages) => {
   const groups = AGE_GROUPS.map((group) => ({
     ...group,
@@ -98,11 +150,13 @@ function App() {
     name: '',
     ages: [],
     error: '',
+    source: '',
   })
   const [feverFile, setFeverFile] = useState({
     name: '',
     ages: [],
     error: '',
+    source: '',
   })
 
   const handleFile = async (file, setter) => {
@@ -110,30 +164,30 @@ function App() {
     try {
       const arrayBuffer = await file.arrayBuffer()
       const workbook = XLSX.read(arrayBuffer, { type: 'array' })
-      const sheet = workbook.Sheets[workbook.SheetNames[0]]
-      const rows = XLSX.utils.sheet_to_json(sheet, {
-        header: 1,
-        raw: true,
-      })
-      const ages = rows
-        .map((row) => normalizeAge(row?.[0]))
-        .filter((age) => age !== null && age >= 0 && age <= 120)
+      const result = findAgesInWorkbook(workbook)
+      const ages = result.ages || []
+      const source =
+        result.sheetName && result.columnIndex !== null
+          ? `${result.sheetName} / ${columnLabel(result.columnIndex)}열`
+          : ''
 
       if (ages.length === 0) {
         setter({
           name: file.name,
           ages: [],
-          error: '숫자 나이 데이터를 찾지 못했습니다.',
+          error: '0~120 사이 숫자 나이 데이터를 찾지 못했습니다.',
+          source: '',
         })
         return
       }
 
-      setter({ name: file.name, ages, error: '' })
+      setter({ name: file.name, ages, error: '', source })
     } catch (error) {
       setter({
         name: file.name,
         ages: [],
         error: '엑셀 파일을 읽지 못했습니다.',
+        source: '',
       })
     }
   }
@@ -247,6 +301,9 @@ function App() {
                 <span>{visitFile.name || '파일을 선택하세요'}</span>
                 <span>{visitFile.ages.length ? `${visitFile.ages.length}명` : ''}</span>
               </div>
+              {visitFile.source ? (
+                <div className="upload-card__hint">탐지: {visitFile.source}</div>
+              ) : null}
               {visitFile.error ? (
                 <div className="upload-card__error">
                   <CircleAlert size={16} />
@@ -272,6 +329,9 @@ function App() {
                 <span>{feverFile.name || '파일을 선택하세요'}</span>
                 <span>{feverFile.ages.length ? `${feverFile.ages.length}명` : ''}</span>
               </div>
+              {feverFile.source ? (
+                <div className="upload-card__hint">탐지: {feverFile.source}</div>
+              ) : null}
               {feverFile.error ? (
                 <div className="upload-card__error">
                   <CircleAlert size={16} />
