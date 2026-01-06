@@ -51,43 +51,11 @@ const normalizeAge = (value) => {
   return null
 }
 
-const columnLabel = (index) => {
-  let label = ''
-  let current = index + 1
-  while (current > 0) {
-    const remainder = (current - 1) % 26
-    label = String.fromCharCode(65 + remainder) + label
-    current = Math.floor((current - 1) / 26)
-  }
-  return label
-}
-
-const findBestColumn = (rows) => {
-  const maxColumns = rows.reduce((max, row) => {
-    if (Array.isArray(row)) {
-      return Math.max(max, row.length)
-    }
-    return max
-  }, 0)
-
-  let best = { ages: [], columnIndex: null, count: 0 }
-  for (let col = 0; col < maxColumns; col += 1) {
-    const ages = []
-    rows.forEach((row) => {
-      const age = normalizeAge(row?.[col])
-      if (age !== null && age >= 0 && age <= 120) {
-        ages.push(age)
-      }
-    })
-    if (ages.length > best.count) {
-      best = { ages, columnIndex: col, count: ages.length }
-    }
-  }
-  return best
-}
+const TARGET_COLUMN_INDEX = 3
+const TARGET_COLUMN_LABEL = 'D열'
 
 const findAgesInWorkbook = (workbook) => {
-  let best = { ages: [], sheetName: '', columnIndex: null, count: 0 }
+  let best = { ages: [], sheetName: '', count: 0 }
   workbook.SheetNames.forEach((sheetName) => {
     const sheet = workbook.Sheets[sheetName]
     const rows = XLSX.utils.sheet_to_json(sheet, {
@@ -95,9 +63,15 @@ const findAgesInWorkbook = (workbook) => {
       raw: true,
       defval: null,
     })
-    const result = findBestColumn(rows)
-    if (result.count > best.count) {
-      best = { ...result, sheetName }
+    const ages = []
+    rows.forEach((row) => {
+      const age = normalizeAge(row?.[TARGET_COLUMN_INDEX])
+      if (age !== null && age >= 0 && age <= 120) {
+        ages.push(age)
+      }
+    })
+    if (ages.length > best.count) {
+      best = { ages, sheetName, count: ages.length }
     }
   })
   return best
@@ -166,16 +140,13 @@ function App() {
       const workbook = XLSX.read(arrayBuffer, { type: 'array' })
       const result = findAgesInWorkbook(workbook)
       const ages = result.ages || []
-      const source =
-        result.sheetName && result.columnIndex !== null
-          ? `${result.sheetName} / ${columnLabel(result.columnIndex)}열`
-          : ''
+      const source = result.sheetName ? `${result.sheetName} / ${TARGET_COLUMN_LABEL}` : ''
 
       if (ages.length === 0) {
         setter({
           name: file.name,
           ages: [],
-          error: '0~120 사이 숫자 나이 데이터를 찾지 못했습니다.',
+          error: `D열에서 0~120 사이 숫자 나이 데이터를 찾지 못했습니다.`,
           source: '',
         })
         return
@@ -279,7 +250,7 @@ function App() {
           <div className="panel__header">
             <div>
               <h2>데이터 불러오기</h2>
-              <p>엑셀 첫 번째 열의 숫자만 집계하고 머리말은 제외합니다.</p>
+              <p>엑셀 D열의 숫자 나이만 집계하고 머리말은 제외합니다.</p>
             </div>
             <span className="panel__chip">Vercel 배포용</span>
           </div>
@@ -302,7 +273,7 @@ function App() {
                 <span>{visitFile.ages.length ? `${visitFile.ages.length}명` : ''}</span>
               </div>
               {visitFile.source ? (
-                <div className="upload-card__hint">탐지: {visitFile.source}</div>
+                <div className="upload-card__hint">사용: {visitFile.source}</div>
               ) : null}
               {visitFile.error ? (
                 <div className="upload-card__error">
@@ -330,7 +301,7 @@ function App() {
                 <span>{feverFile.ages.length ? `${feverFile.ages.length}명` : ''}</span>
               </div>
               {feverFile.source ? (
-                <div className="upload-card__hint">탐지: {feverFile.source}</div>
+                <div className="upload-card__hint">사용: {feverFile.source}</div>
               ) : null}
               {feverFile.error ? (
                 <div className="upload-card__error">
