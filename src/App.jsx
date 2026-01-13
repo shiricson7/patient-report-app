@@ -36,6 +36,52 @@ const AGE_GROUPS = [
 
 const TARGET_COLUMN_INDEX = 3
 const TARGET_COLUMN_LABEL = 'D열'
+const REPORTS_ENDPOINT = import.meta.env.VITE_REPORTS_ENDPOINT || '/api/reports'
+const MAX_FILE_LIST = 6
+
+const buildFileRegex = (suffix) => {
+  return new RegExp(`^(\\d{4}-\\d{2}-\\d{2})_${suffix}\\.(xlsx|xls)$`, 'i')
+}
+
+const parseDateString = (value) => {
+  if (!value) return null
+  const [year, month, day] = value.split('-').map(Number)
+  if (!year || !month || !day) return null
+  const date = new Date(year, month - 1, day)
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null
+  }
+  return date
+}
+
+const formatDate = (date) => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const getWeekStartMonday = (date) => {
+  const day = date.getDay()
+  const diffToMonday = (day + 6) % 7
+  const monday = new Date(date)
+  monday.setDate(date.getDate() - diffToMonday)
+  return monday
+}
+
+const buildExpectedWeekDates = (monday) => {
+  const dates = []
+  for (let offset = 0; offset <= 5; offset += 1) {
+    const date = new Date(monday)
+    date.setDate(monday.getDate() + offset)
+    dates.push(formatDate(date))
+  }
+  return dates
+}
 
 const normalizeAge = (value) => {
   if (value === null || value === undefined) return null
@@ -45,7 +91,7 @@ const normalizeAge = (value) => {
   if (typeof value === 'string') {
     const trimmed = value.trim()
     if (!trimmed) return null
-    const match = trimmed.match(/(\d+(\.\d+)?)/)
+    const match = trimmed.match(/(\\d+(\\.\\d+)?)/)
     if (!match) return null
     const parsed = Number(match[1])
     if (!Number.isFinite(parsed)) return null
@@ -125,7 +171,89 @@ const combineCounts = (visitCounts, feverCounts) => {
 
 const formatPercent = (value) => `${value.toFixed(1)}%`
 const formatWeekLabel = (report) => `${report.weekStart} ~ ${report.weekEnd}`
-const REPORTS_ENDPOINT = import.meta.env.VITE_REPORTS_ENDPOINT || '/api/reports'
+
+const buildUploadWarnings = (files, weekCheck) => {
+  const warnings = []
+  const invalidNameFiles = files.filter((file) => file.nameIssue === 'pattern')
+  const invalidDateFiles = files.filter((file) => file.nameIssue === 'date')
+  const readErrors = files.filter((file) => file.error)
+  const dateCounts = files.reduce((acc, file) => {
+    if (!file.dateString || file.nameIssue) return acc
+    acc.set(file.dateString, (acc.get(file.dateString) || 0) + 1)
+    return acc
+  }, new Map())
+  const duplicateDates = Array.from(dateCounts.entries()).filter((entry) => entry[1] > 1)
+
+  if (invalidNameFiles.length) {
+    warnings.push(
+      `파일명 규칙과 다른 파일: ${invalidNameFiles
+        .map((file) => file.name)
+        .join(', ')}`,
+    )
+  }
+
+  if (invalidDateFiles.length) {
+    warnings.push(
+      `날짜 형식이 올바르지 않은 파일: ${invalidDateFiles
+        .map((file) => file.name)
+        .join(', ')}`,
+    )
+  }
+
+  if (readErrors.length) {
+    warnings.push(
+      `읽기 오류 또는 나이 데이터 없음: ${readErrors
+        .map((file) => file.name)
+        .join(', ')}`,
+    )
+  }
+
+  if (duplicateDates.length) {
+    warnings.push(
+      `같은 날짜 파일이 여러 개 있습니다: ${duplicateDates
+        .map(([date, count]) => `${date} (${count}개)`)
+        .join(', ')}`,
+    )
+  }
+
+  if (weekCheck) {
+    if (weekCheck.outOfRange.length) {
+      warnings.push(
+        `다른 주의 파일이 포함되었습니다: ${weekCheck.outOfRange.join(', ')}`,
+      )
+    }
+    if (weekCheck.missingDays.length) {
+      warnings.push(
+        `누락된 요일 파일: ${weekCheck.missingDays.join(', ')}`,
+      )
+    }
+  }
+
+  return warnings
+}
+
+const analyzeWeekDates = (dateStrings) => {
+  const uniqueDates = Array.from(new Set(dateStrings))
+  if (!uniqueDates.length) return null
+
+  const parsedDates = uniqueDates.map((value) => parseDateString(value)).filter(Boolean)
+  if (!parsedDates.length) return null
+
+  parsedDates.sort((a, b) => a - b)
+  const weekStart = getWeekStartMonday(parsedDates[0])
+  const expectedDates = buildExpectedWeekDates(weekStart)
+  const expectedSet = new Set(expectedDates)
+
+  const missingDays = expectedDates.filter((value) => !uniqueDates.includes(value))
+  const outOfRange = uniqueDates.filter((value) => !expectedSet.has(value))
+
+  return {
+    weekStart: formatDate(weekStart),
+    weekEnd: formatDate(new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 5)),
+    missingDays,
+    outOfRange: outOfRange.sort(),
+  }
+}
 
 const ChartTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null
@@ -146,18 +274,8 @@ function App() {
   const [reportDate, setReportDate] = useState(() => {
     return new Date().toISOString().slice(0, 10)
   })
-  const [visitFile, setVisitFile] = useState({
-    name: '',
-    ages: [],
-    error: '',
-    source: '',
-  })
-  const [feverFile, setFeverFile] = useState({
-    name: '',
-    ages: [],
-    error: '',
-    source: '',
-  })
+  const [visitUpload, setVisitUpload] = useState({ files: [], ages: [], warnings: [] })
+  const [feverUpload, setFeverUpload] = useState({ files: [], ages: [], warnings: [] })
   const [reports, setReports] = useState([])
   const [selectedWeek, setSelectedWeek] = useState('')
   const [isLoading, setIsLoading] = useState(true)
@@ -197,34 +315,79 @@ function App() {
     }
   }, [])
 
-  const handleFile = async (file, setter) => {
-    if (!file) return
-    try {
-      const arrayBuffer = await file.arrayBuffer()
-      const workbook = XLSX.read(arrayBuffer, { type: 'array' })
-      const result = findAgesInWorkbook(workbook)
-      const ages = result.ages || []
-      const source = result.sheetName ? `${result.sheetName} / ${TARGET_COLUMN_LABEL}` : ''
+  const handleUploadFiles = async (fileList, type, setter) => {
+    const files = Array.from(fileList || [])
+    if (!files.length) return
 
-      if (ages.length === 0) {
-        setter({
+    const suffix = type === 'visit' ? '총환자수' : '발열환자수'
+    const regex = buildFileRegex(suffix)
+
+    const parsedFiles = await Promise.all(
+      files.map(async (file) => {
+        let dateString = null
+        let nameIssue = ''
+        const match = file.name.match(regex)
+        if (match) {
+          dateString = match[1]
+          const parsedDate = parseDateString(dateString)
+          if (!parsedDate) {
+            nameIssue = 'date'
+          }
+        } else {
+          nameIssue = 'pattern'
+        }
+
+        let ages = []
+        let error = ''
+        let source = ''
+        try {
+          const arrayBuffer = await file.arrayBuffer()
+          const workbook = XLSX.read(arrayBuffer, { type: 'array' })
+          const result = findAgesInWorkbook(workbook)
+          ages = result.ages || []
+          source = result.sheetName ? `${result.sheetName} / ${TARGET_COLUMN_LABEL}` : ''
+          if (!ages.length) {
+            error = `D열에서 0~120 사이 숫자 나이 데이터를 찾지 못했습니다.`
+          }
+        } catch (fileError) {
+          error = '엑셀 파일을 읽지 못했습니다.'
+        }
+
+        return {
           name: file.name,
-          ages: [],
-          error: `D열에서 0~120 사이 숫자 나이 데이터를 찾지 못했습니다.`,
-          source: '',
-        })
-        return
-      }
+          dateString,
+          nameIssue,
+          ages,
+          error,
+          source,
+        }
+      }),
+    )
 
-      setter({ name: file.name, ages, error: '', source })
-    } catch (error) {
-      setter({
-        name: file.name,
-        ages: [],
-        error: '엑셀 파일을 읽지 못했습니다.',
-        source: '',
-      })
-    }
+    const sortedFiles = [...parsedFiles].sort((a, b) => {
+      const dateA = a.dateString ? parseDateString(a.dateString) : null
+      const dateB = b.dateString ? parseDateString(b.dateString) : null
+      if (dateA && dateB) {
+        return dateA - dateB
+      }
+      if (dateA) return -1
+      if (dateB) return 1
+      return a.name.localeCompare(b.name)
+    })
+
+    const validDates = parsedFiles
+      .filter((file) => file.dateString && file.nameIssue !== 'pattern')
+      .map((file) => file.dateString)
+
+    const weekCheck = analyzeWeekDates(validDates)
+    const warnings = buildUploadWarnings(parsedFiles, weekCheck)
+
+    setter({
+      files: sortedFiles,
+      ages: parsedFiles.flatMap((file) => file.ages || []),
+      warnings,
+      weekCheck,
+    })
   }
 
   const selectedReport = useMemo(() => {
@@ -241,14 +404,14 @@ function App() {
       ? (weeklyTotalFever / weeklyTotalVisit) * 100
       : 0
 
-  const visitCounts = useMemo(() => buildCounts(visitFile.ages), [visitFile.ages])
-  const feverCounts = useMemo(() => buildCounts(feverFile.ages), [feverFile.ages])
+  const visitCounts = useMemo(() => buildCounts(visitUpload.ages), [visitUpload.ages])
+  const feverCounts = useMemo(() => buildCounts(feverUpload.ages), [feverUpload.ages])
   const uploadGroups = useMemo(
     () => combineCounts(visitCounts, feverCounts),
     [visitCounts, feverCounts],
   )
-  const uploadTotalVisit = visitFile.ages.length
-  const uploadTotalFever = feverFile.ages.length
+  const uploadTotalVisit = visitUpload.ages.length
+  const uploadTotalFever = feverUpload.ages.length
   const uploadOverallRatio = uploadTotalVisit
     ? (uploadTotalFever / uploadTotalVisit) * 100
     : 0
@@ -269,6 +432,9 @@ function App() {
       totalCount: group.totalCount,
     }))
   }, [activeGroups])
+
+  const visitFileCount = visitUpload.files.length
+  const feverFileCount = feverUpload.files.length
 
   return (
     <div className="app">
@@ -416,72 +582,148 @@ function App() {
             <div className="panel__header">
               <div>
                 <h2>데이터 불러오기</h2>
-                <p>엑셀 {TARGET_COLUMN_LABEL}의 숫자 나이만 집계합니다.</p>
+                <p>요일별 여러 파일을 업로드하면 자동으로 합산합니다.</p>
               </div>
               <span className="panel__chip">즉시 확인</span>
             </div>
             <div className="upload-grid">
-              <label className={`upload-card ${visitFile.error ? 'is-error' : ''}`}>
+              <label className={`upload-card ${visitUpload.warnings.length ? 'is-error' : ''}`}>
                 <input
                   type="file"
                   accept=".xlsx,.xls"
-                  onChange={(event) => handleFile(event.target.files?.[0], setVisitFile)}
+                  multiple
+                  onChange={(event) =>
+                    handleUploadFiles(event.target.files, 'visit', setVisitUpload)
+                  }
                 />
                 <div className="upload-card__top">
                   <UploadCloud size={20} />
                   <div>
-                    <strong>총환자수.xlsx</strong>
-                    <span>전체 내원 환자 나이 목록</span>
+                    <strong>총환자수 파일들</strong>
+                    <span>월~토 내원 환자 나이 목록</span>
                   </div>
                 </div>
                 <div className="upload-card__status">
-                  <span>{visitFile.name || '파일을 선택하세요'}</span>
-                  <span>{visitFile.ages.length ? `${visitFile.ages.length}명` : ''}</span>
+                  <span>
+                    {visitFileCount
+                      ? `${visitFileCount}개 파일 선택`
+                      : '파일을 선택하세요'}
+                  </span>
+                  <span>{visitUpload.ages.length ? `${visitUpload.ages.length}명` : ''}</span>
                 </div>
-                {visitFile.source ? (
-                  <div className="upload-card__hint">사용: {visitFile.source}</div>
-                ) : null}
-                {visitFile.error ? (
-                  <div className="upload-card__error">
-                    <CircleAlert size={16} />
-                    {visitFile.error}
+                {visitUpload.files.length ? (
+                  <div className="upload-card__list">
+                    {visitUpload.files.slice(0, MAX_FILE_LIST).map((file) => (
+                      <div
+                        key={file.name}
+                        className={`upload-card__file ${
+                          file.error || file.nameIssue ? 'is-error' : ''
+                        }`}
+                      >
+                        <div>
+                          <span className="upload-card__file-name">{file.name}</span>
+                          {file.dateString ? (
+                            <span className="upload-card__file-date">{file.dateString}</span>
+                          ) : null}
+                          {file.nameIssue === 'pattern' ? (
+                            <span className="upload-card__file-note">파일명 규칙 불일치</span>
+                          ) : null}
+                          {file.nameIssue === 'date' ? (
+                            <span className="upload-card__file-note">날짜 형식 오류</span>
+                          ) : null}
+                          {file.error ? (
+                            <span className="upload-card__file-note">{file.error}</span>
+                          ) : null}
+                        </div>
+                        <span>{file.ages.length ? `${file.ages.length}명` : '0명'}</span>
+                      </div>
+                    ))}
+                    {visitUpload.files.length > MAX_FILE_LIST ? (
+                      <div className="upload-card__more">
+                        외 {visitUpload.files.length - MAX_FILE_LIST}개 파일
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
+                {visitUpload.warnings.map((warning, index) => (
+                  <div key={`${warning}-${index}`} className="upload-card__warning">
+                    <CircleAlert size={14} />
+                    <span>{warning}</span>
+                  </div>
+                ))}
               </label>
 
-              <label className={`upload-card ${feverFile.error ? 'is-error' : ''}`}>
+              <label className={`upload-card ${feverUpload.warnings.length ? 'is-error' : ''}`}>
                 <input
                   type="file"
                   accept=".xlsx,.xls"
-                  onChange={(event) => handleFile(event.target.files?.[0], setFeverFile)}
+                  multiple
+                  onChange={(event) =>
+                    handleUploadFiles(event.target.files, 'fever', setFeverUpload)
+                  }
                 />
                 <div className="upload-card__top">
                   <UploadCloud size={20} />
                   <div>
-                    <strong>발열환자수.xlsx</strong>
-                    <span>발열 환자 나이 목록</span>
+                    <strong>발열환자수 파일들</strong>
+                    <span>월~토 발열 환자 나이 목록</span>
                   </div>
                 </div>
                 <div className="upload-card__status">
-                  <span>{feverFile.name || '파일을 선택하세요'}</span>
-                  <span>{feverFile.ages.length ? `${feverFile.ages.length}명` : ''}</span>
+                  <span>
+                    {feverFileCount
+                      ? `${feverFileCount}개 파일 선택`
+                      : '파일을 선택하세요'}
+                  </span>
+                  <span>{feverUpload.ages.length ? `${feverUpload.ages.length}명` : ''}</span>
                 </div>
-                {feverFile.source ? (
-                  <div className="upload-card__hint">사용: {feverFile.source}</div>
-                ) : null}
-                {feverFile.error ? (
-                  <div className="upload-card__error">
-                    <CircleAlert size={16} />
-                    {feverFile.error}
+                {feverUpload.files.length ? (
+                  <div className="upload-card__list">
+                    {feverUpload.files.slice(0, MAX_FILE_LIST).map((file) => (
+                      <div
+                        key={file.name}
+                        className={`upload-card__file ${
+                          file.error || file.nameIssue ? 'is-error' : ''
+                        }`}
+                      >
+                        <div>
+                          <span className="upload-card__file-name">{file.name}</span>
+                          {file.dateString ? (
+                            <span className="upload-card__file-date">{file.dateString}</span>
+                          ) : null}
+                          {file.nameIssue === 'pattern' ? (
+                            <span className="upload-card__file-note">파일명 규칙 불일치</span>
+                          ) : null}
+                          {file.nameIssue === 'date' ? (
+                            <span className="upload-card__file-note">날짜 형식 오류</span>
+                          ) : null}
+                          {file.error ? (
+                            <span className="upload-card__file-note">{file.error}</span>
+                          ) : null}
+                        </div>
+                        <span>{file.ages.length ? `${file.ages.length}명` : '0명'}</span>
+                      </div>
+                    ))}
+                    {feverUpload.files.length > MAX_FILE_LIST ? (
+                      <div className="upload-card__more">
+                        외 {feverUpload.files.length - MAX_FILE_LIST}개 파일
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
+                {feverUpload.warnings.map((warning, index) => (
+                  <div key={`${warning}-${index}`} className="upload-card__warning">
+                    <CircleAlert size={14} />
+                    <span>{warning}</span>
+                  </div>
+                ))}
               </label>
             </div>
             <div className="panel__note">
               <CircleAlert size={18} />
               <span>
-                업로드 모드는 파일을 바로 분석해 보여줍니다. 주간 자동 보고서는
-                Drive 연동으로 별도 집계됩니다.
+                여러 파일은 자동 합산됩니다. 누락 요일이나 파일명 규칙 오류가
+                있으면 경고가 표시됩니다.
               </span>
             </div>
           </section>

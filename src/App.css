@@ -212,6 +212,58 @@
   color: var(--ink);
 }
 
+.upload-card__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.upload-card__file {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+
+.upload-card__file div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.upload-card__file-name {
+  font-weight: 600;
+}
+
+.upload-card__file-date {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.upload-card__file-note {
+  font-size: 0.78rem;
+  color: #b03030;
+}
+
+.upload-card__file.is-error .upload-card__file-name {
+  color: #b03030;
+}
+
+.upload-card__more {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.upload-card__warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: #b03030;
+}
+
 .upload-card__hint {
   color: var(--muted);
   font-size: 0.82rem;
