@@ -6,6 +6,9 @@ const TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly'
 const DEFAULT_SHEET_NAME = 'weekly_reports'
 const REPORT_ID_REGEX = /reportSpreadsheetId:\s*['"]([^'"]+)['"]/
+const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30)
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000
 
 const base64UrlEncode = (input) => {
   return Buffer.from(input)
@@ -104,6 +107,42 @@ const parseMissingDays = (value) => {
   return text.split(',').map((item) => item.trim()).filter(Boolean)
 }
 
+const formatDateParts = (date) => {
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
+  return { year, month, day }
+}
+
+const serialToKstDate = (value) => {
+  const ms = EXCEL_EPOCH_MS + value * MS_PER_DAY + KST_OFFSET_MS
+  return new Date(ms)
+}
+
+const normalizeDateCell = (value, withTime = false) => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const date = serialToKstDate(value)
+    const { year, month, day } = formatDateParts(date)
+    if (!withTime) {
+      return `${year}-${month}-${day}`
+    }
+    const hours = String(date.getUTCHours()).padStart(2, '0')
+    const minutes = String(date.getUTCMinutes()).padStart(2, '0')
+    return `${year}-${month}-${day} ${hours}:${minutes}`
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (/^\d+(\.\d+)?$/.test(trimmed)) {
+      const parsed = Number(trimmed)
+      if (Number.isFinite(parsed)) {
+        return normalizeDateCell(parsed, withTime)
+      }
+    }
+    return trimmed
+  }
+  return ''
+}
+
 const parseReports = (values) => {
   if (!values.length) return []
   const headerRow = values[0]
@@ -142,14 +181,14 @@ const parseReports = (values) => {
         : 0
 
     return {
-      weekStart: getCell(row, 'week_start', 0),
-      weekEnd: getCell(row, 'week_end', 1),
+      weekStart: normalizeDateCell(getCell(row, 'week_start', 0)),
+      weekEnd: normalizeDateCell(getCell(row, 'week_end', 1)),
       totalVisit,
       totalFever,
       overallRatio,
       groups,
       missingDays: parseMissingDays(getCell(row, 'missing_days', 6)),
-      createdAt: getCell(row, 'created_at', 7),
+      createdAt: normalizeDateCell(getCell(row, 'created_at', 7), true),
     }
   })
 }
