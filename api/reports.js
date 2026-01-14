@@ -1,8 +1,11 @@
 import crypto from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import path from 'node:path'
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly'
 const DEFAULT_SHEET_NAME = 'weekly_reports'
+const REPORT_ID_REGEX = /reportSpreadsheetId:\s*['"]([^'"]+)['"]/
 
 const base64UrlEncode = (input) => {
   return Buffer.from(input)
@@ -69,6 +72,22 @@ const fetchSheetValues = async ({ accessToken, sheetId, sheetName }) => {
   return data.values || []
 }
 
+const readSheetIdFromAppsScript = async () => {
+  try {
+    const filePath = path.resolve(process.cwd(), 'scripts/apps-script/weekly-report.gs')
+    const contents = await readFile(filePath, 'utf8')
+    const match = contents.match(REPORT_ID_REGEX)
+    return match?.[1] || null
+  } catch (error) {
+    return null
+  }
+}
+
+const getSheetId = async () => {
+  if (process.env.GOOGLE_SHEETS_ID) return process.env.GOOGLE_SHEETS_ID
+  return readSheetIdFromAppsScript()
+}
+
 const parseMissingDays = (value) => {
   if (!value) return []
   if (Array.isArray(value)) return value
@@ -93,14 +112,15 @@ const parseReports = (values) => {
     return acc
   }, {})
 
-  const getCell = (row, key) => {
+  const getCell = (row, key, fallbackIndex) => {
     const index = headerIndex[key]
-    if (index === undefined) return ''
-    return row[index]
+    if (index !== undefined) return row[index]
+    if (fallbackIndex !== undefined) return row[fallbackIndex]
+    return ''
   }
 
   return values.slice(1).map((row) => {
-    const groupsRaw = getCell(row, 'groups_json')
+    const groupsRaw = getCell(row, 'groups_json', 5)
     let groups = []
     if (typeof groupsRaw === 'string' && groupsRaw.trim()) {
       try {
@@ -112,9 +132,9 @@ const parseReports = (values) => {
       groups = groupsRaw
     }
 
-    const totalVisit = Number(getCell(row, 'total_visit')) || 0
-    const totalFever = Number(getCell(row, 'total_fever')) || 0
-    const overallRatioValue = getCell(row, 'overall_ratio')
+    const totalVisit = Number(getCell(row, 'total_visit', 2)) || 0
+    const totalFever = Number(getCell(row, 'total_fever', 3)) || 0
+    const overallRatioValue = getCell(row, 'overall_ratio', 4)
     const overallRatio = Number.isFinite(Number(overallRatioValue))
       ? Number(overallRatioValue)
       : totalVisit
@@ -122,14 +142,14 @@ const parseReports = (values) => {
         : 0
 
     return {
-      weekStart: getCell(row, 'week_start'),
-      weekEnd: getCell(row, 'week_end'),
+      weekStart: getCell(row, 'week_start', 0),
+      weekEnd: getCell(row, 'week_end', 1),
       totalVisit,
       totalFever,
       overallRatio,
       groups,
-      missingDays: parseMissingDays(getCell(row, 'missing_days')),
-      createdAt: getCell(row, 'created_at'),
+      missingDays: parseMissingDays(getCell(row, 'missing_days', 6)),
+      createdAt: getCell(row, 'created_at', 7),
     }
   })
 }
@@ -138,7 +158,7 @@ export default async function handler(request, response) {
   try {
     const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL
     const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n')
-    const sheetId = process.env.GOOGLE_SHEETS_ID
+    const sheetId = await getSheetId()
     const sheetName = process.env.GOOGLE_SHEETS_TAB || DEFAULT_SHEET_NAME
 
     if (!clientEmail || !privateKey || !sheetId) {
