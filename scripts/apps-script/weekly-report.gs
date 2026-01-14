@@ -1,7 +1,7 @@
 const CONFIG = {
   timezone: 'Asia/Seoul',
-  folderId: 'REPLACE_WITH_FOLDER_ID',
-  reportSpreadsheetId: 'REPLACE_WITH_REPORT_SHEET_ID',
+  folderId: '13AxT5x_P-tk51dON_YNmQHv_blVRavVj',
+  reportSpreadsheetId: '1P2xA__ttUTyw763wxtGvJS5qBXatV8KQiVI8ksl05GQ',
   reportSheetName: 'weekly_reports',
   fileSuffix: {
     visit: '총환자수.xlsx',
