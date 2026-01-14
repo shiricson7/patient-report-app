@@ -288,7 +288,7 @@ function App() {
       setIsLoading(true)
       setLoadError('')
       try {
-        const response = await fetch(REPORTS_ENDPOINT)
+        const response = await fetch(REPORTS_ENDPOINT, { cache: 'no-store' })
         if (!response.ok) {
           throw new Error('보고서 데이터를 불러오지 못했습니다.')
         }

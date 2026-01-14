@@ -153,7 +153,7 @@ export default async function handler(request, response) {
     const reports = parseReports(values).filter((report) => report.weekStart)
     reports.sort((a, b) => String(b.weekStart).localeCompare(String(a.weekStart)))
 
-    response.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=300')
+    response.setHeader('Cache-Control', 'no-store')
     response.status(200).json({ weeks: reports })
   } catch (error) {
     response.status(500).json({ error: error.message })
